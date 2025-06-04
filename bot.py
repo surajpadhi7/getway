@@ -67,8 +67,14 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     logger.info(f"\n📦 Payload: {payload}")
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(PAYMENT_URL, json=payload)
+            logger.info(f"🔄 HTTP Status: {response.status_code}")
+
+            if response.status_code != 200:
+                await update.message.reply_text(f"❌ Server returned HTTP {response.status_code}. Try later.")
+                return ConversationHandler.END
+
             res_json = response.json()
             logger.info(f"📨 FastPay Response: {res_json}")
 
@@ -76,7 +82,8 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 pay_link = res_json["data"].get("payUrl")
                 await update.message.reply_text(f"✅ Payment link generated:\n{pay_link}")
             else:
-                await update.message.reply_text("❌ FastPay error. Please try again later.")
+                msg = res_json.get("msg", "Unknown error")
+                await update.message.reply_text(f"❌ FastPay error: {msg}")
     except Exception as e:
         logger.error(f"❌ Request Error: {e}")
         await update.message.reply_text("❌ Server error. Contact admin.")
