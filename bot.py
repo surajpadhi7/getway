@@ -57,11 +57,11 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         "merchantNo": MERCHANT_NO,
         "orderAmount": amount,
         "orderNo": order_no,
-        "notifyUrl": NOTIFY_URL,
-        "returnUrl": RETURN_URL,
-        "payType": "BANK",  # or "QR", "UPI" if supported by FastPay
+        "notifyUrl": NOTIFY_URL.replace(";", ""),
+        "returnUrl": RETURN_URL.replace(";", ""),
+        "payType": "BANK",
         "productName": "OTT Purchase",
-        "productCode": "90001"  # Required product code from FastPay
+        "productCode": "90001"
     }
     payload["sign"] = generate_sign(payload)
 
@@ -82,7 +82,7 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 pay_link = res_json["data"].get("payUrl")
                 await update.message.reply_text(f"✅ Payment link generated:\n{pay_link}")
             else:
-                msg = res_json.get("msg", "Unknown error")
+                msg = res_json.get("msg", "FastPay error: Unknown error")
                 await update.message.reply_text(f"❌ FastPay error: {msg}")
     except Exception as e:
         logger.error(f"❌ Request Error: {e}")
