@@ -5,6 +5,14 @@ import time
 import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+import requests
+
+try:
+    ip = requests.get("https://api.ipify.org").text
+    print("🌐 Server Public IP:", ip)
+except Exception as e:
+    print("❌ IP fetch error:", str(e))
+
 
 # ====== CONFIGURATION ======
 BOT_TOKEN = "7603128499:AAHrUje-z46qOmqcGJ89GGFaCiR4toVxGA8"
