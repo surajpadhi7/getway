@@ -1,89 +1,106 @@
 import logging
-import random
 import string
-import requests
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+import random
+import hashlib
+import httpx
+from telegram import Update, ForceReply
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
-# --- CONFIGURATION ---
+# Enable logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Replace with your credentials
 BOT_TOKEN = "7603128499:AAHrUje-z46qOmqcGJ89GGFaCiR4toVxGA8"
-FASTPAY_API_URL = "https://api.fast-vip.com/api/payGate/payOrder"
-MERCHANT_ID = "mer553833"
+MERCHANT_NO = "mer553833"
 MERCHANT_KEY = "f760332dcb1dd887d4079754b52fdb2b"
-NOTIFY_URL = "https://yourdomain.com/callback"  # Replace with your actual callback URL
+PAYMENT_URL = "https://api.fast-vip.com/api/payGate/payOrder"
+NOTIFY_URL = "https://yourdomain.com/callback"  # replace with your actual domain
 RETURN_URL = "https://t.me/ott_heree"
 
-logging.basicConfig(level=logging.INFO)
+ASK_AMOUNT = 1
 
-# --- HELPER FUNCTIONS ---
-def generate_order_id():
-    return "OTT" + ''.join(random.choices(string.digits + string.ascii_lowercase, k=12))
+# Utility to generate a random order number
+def generate_order_no():
+    return "OTT" + ''.join(random.choices(string.digits, k=13))
 
-def create_signature(data: dict, key: str) -> str:
-    import hashlib
-    sorted_items = sorted((k, str(v)) for k, v in data.items() if v and k != "sign")
-    sign_string = "&".join(f"{k}={v}" for k, v in sorted_items) + key
-    return hashlib.md5(sign_string.encode()).hexdigest().upper()
+# Utility to generate sign using MD5
+def generate_sign(payload: dict) -> str:
+    keys = sorted(payload)
+    sign_str = ""
+    for key in keys:
+        if payload[key] is not None and payload[key] != "":
+            sign_str += f"{key}={payload[key]}&"
+    sign_str += f"key={MERCHANT_KEY}"
+    return hashlib.md5(sign_str.encode('utf-8')).hexdigest().upper()
 
-def create_payment_link(amount: str) -> str:
-    order_id = generate_order_id()
-    payload = {
-        "merchantNo": MERCHANT_ID,
-        "orderAmount": amount,
-        "orderNo": order_id,
-        "notifyUrl": NOTIFY_URL,
-        "returnUrl": RETURN_URL,
-        "payType": "BANK",  # You can change to 'QR' or 'UPI' if available
-        "productName": "OTT Purchase"
-    }
-    payload["sign"] = create_signature(payload, MERCHANT_KEY)
-    logging.info(f"📦 Payload: {payload}")
-    try:
-        response = requests.post(FASTPAY_API_URL, json=payload, timeout=10)
-        response_data = response.json()
-        logging.info(f"📨 FastPay Response: {response_data}")
-        if response_data.get("code") == 200 and response_data.get("data"):
-            return response_data["data"].get("payUrl") or "❌ Payment URL not returned"
-        return f"❌ FastPay Error: {response_data.get('msg', 'Unknown error')}"
-    except Exception as e:
-        logging.error(f"Request Exception: {str(e)}")
-        return f"❌ Request Error: {str(e)}"
+# Start command
+def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update.message.reply_text("Welcome! Use /pay to make a payment.")
 
-# --- TELEGRAM BOT HANDLERS ---
-ASK_AMOUNT = range(1)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome! Send /pay to start payment.")
-
-async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💰 Kitna pay karna hai? Amount bhejo.")
+# Pay command handler
+async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("💰 Kitna pay karna hai? Amount bhejo (e.g. 500)")
     return ASK_AMOUNT
 
-async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Receive amount and call FastPay
+async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     amount = update.message.text.strip()
     if not amount.isdigit():
-        await update.message.reply_text("❌ Sirf number bhejo, jaise 500")
-        return ASK_AMOUNT
-    link = create_payment_link(amount)
-    await update.message.reply_text(f"✅ Payment link generated:
-{link}")
+        await update.message.reply_text("❌ Amount sahi format me bhejo (sirf number)")
+        return ConversationHandler.END
+
+    order_no = generate_order_no()
+    payload = {
+        "merchantNo": MERCHANT_NO,
+        "orderAmount": amount,
+        "orderNo": order_no,
+        "notifyUrl": NOTIFY_URL,
+        "returnUrl": RETURN_URL,
+        "payType": "BANK",
+        "productName": "OTT Purchase"
+    }
+    payload["sign"] = generate_sign(payload)
+
+    logger.info(f"\n📦 Payload: {payload}")
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(PAYMENT_URL, json=payload)
+            res_json = response.json()
+            logger.info(f"📨 FastPay Response: {res_json}")
+
+            if res_json.get("code") == 200 and res_json.get("data"):
+                pay_link = res_json["data"].get("payUrl")
+                await update.message.reply_text(f"✅ Payment link generated:\n{pay_link}")
+            else:
+                await update.message.reply_text("❌ FastPay error. Please try again later.")
+    except Exception as e:
+        logger.error(f"❌ Request Error: {e}")
+        await update.message.reply_text("❌ Server error. Contact admin.")
+
     return ConversationHandler.END
 
+# Cancel command
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled.")
     return ConversationHandler.END
 
-# --- MAIN ---
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-conv_handler = ConversationHandler(
-    entry_points=[CommandHandler("pay", pay_command)],
-    states={ASK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_amount)]},
-    fallbacks=[CommandHandler("cancel", cancel)]
-)
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(conv_handler)
-
+# Main
 if __name__ == '__main__':
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("pay", pay_command)],
+        states={
+            ASK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(conv_handler)
+
+    logger.info("🚀 Bot started")
     app.run_polling()
