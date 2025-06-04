@@ -1,137 +1,89 @@
 import logging
-import hashlib
-import uuid
-import time
+import random
+import string
 import requests
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
-import requests
 
-try:
-    ip = requests.get("https://api.ipify.org").text
-    print("🌐 Server Public IP:", ip)
-except Exception as e:
-    print("❌ IP fetch error:", str(e))
-
-
-# ====== CONFIGURATION ======
+# --- CONFIGURATION ---
 BOT_TOKEN = "7603128499:AAHrUje-z46qOmqcGJ89GGFaCiR4toVxGA8"
+FASTPAY_API_URL = "https://api.fast-vip.com/api/payGate/payOrder"
 MERCHANT_ID = "mer553833"
 MERCHANT_KEY = "f760332dcb1dd887d4079754b52fdb2b"
-PAY_URL = "https://api.fast-vip.com/api/payGate/payOrder"
+NOTIFY_URL = "https://yourdomain.com/callback"  # Replace with your actual callback URL
 RETURN_URL = "https://t.me/ott_heree"
-NOTIFY_URL = "https://yourdomain.com/callback"  # Update this when you set webhook
 
-# Logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-ASK_AMOUNT = range(1)
-pending_orders = {}
+# --- HELPER FUNCTIONS ---
+def generate_order_id():
+    return "OTT" + ''.join(random.choices(string.digits + string.ascii_lowercase, k=12))
 
-# === SIGN GENERATOR ===
-def generate_sign(data: dict, key: str):
-    sorted_data = sorted(data.items())
-    sign_str = '&'.join([f"{k}={v}" for k, v in sorted_data]) + f"&key={key}"
-    return hashlib.md5(sign_str.encode()).hexdigest().upper()
+def create_signature(data: dict, key: str) -> str:
+    import hashlib
+    sorted_items = sorted((k, str(v)) for k, v in data.items() if v and k != "sign")
+    sign_string = "&".join(f"{k}={v}" for k, v in sorted_items) + key
+    return hashlib.md5(sign_string.encode()).hexdigest().upper()
 
-# === /start ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Welcome bhai! Type /pay to start a payment.")
-
-# === /pay ===
-async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💰 Bhai kitna pay karna hai? (Number me bhej)")
-
-    return ASK_AMOUNT
-
-# === Receive Amount and Create Real Payment Link ===
-async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    user_id = user.id
-    try:
-        amount = int(update.message.text.strip())
-    except:
-        await update.message.reply_text("❌ Bhai sirf number bhejna. Example: 500")
-        return ASK_AMOUNT
-
-    order_no = f"OTT{int(time.time())}{str(uuid.uuid4())[:6]}"
+def create_payment_link(amount: str) -> str:
+    order_id = generate_order_id()
     payload = {
         "merchantNo": MERCHANT_ID,
-        "orderAmount": str(amount),
-        "orderNo": order_no,
+        "orderAmount": amount,
+        "orderNo": order_id,
         "notifyUrl": NOTIFY_URL,
         "returnUrl": RETURN_URL,
-        "payType": "BANK",  # ✅ Use "BANK" or whatever is enabled in your merchant
+        "payType": "BANK",  # You can change to 'QR' or 'UPI' if available
         "productName": "OTT Purchase"
     }
-    payload["sign"] = generate_sign(payload, MERCHANT_KEY)
-
-    print("\n📦 Payload:", payload)
-
+    payload["sign"] = create_signature(payload, MERCHANT_KEY)
+    logging.info(f"📦 Payload: {payload}")
     try:
-        res = requests.post(PAY_URL, json=payload)
-        res_json = res.json()
-        print("📨 FastPay Response:", res_json)
-
-        if res_json.get("code") == "200" and res_json.get("data"):
-            pay_link = res_json["data"].get("payUrl")
-            if not pay_link:
-                await update.message.reply_text("❌ Link missing from FastPay response.")
-                return ConversationHandler.END
-
-            pending_orders[user_id] = {
-                "order_id": order_no,
-                "amount": amount
-            }
-
-            await update.message.reply_text(
-                f"✅ Bhai yeh raha tera real payment link:\n\n"
-                f"🧾 Order ID: `{order_no}`\n"
-                f"💰 Amount: ₹{amount}\n"
-                f"🔗 [Pay Now]({pay_link})\n\n"
-                f"📩 *Payment karne ke baad likh:* `payment done`",
-                parse_mode="Markdown", disable_web_page_preview=True
-            )
-            return ConversationHandler.END
-        else:
-            msg = res_json.get("msg") or "FastPay internal error"
-            await update.message.reply_text(f"❌ FastPay Error: {msg}")
-            return ConversationHandler.END
+        response = requests.post(FASTPAY_API_URL, json=payload, timeout=10)
+        response_data = response.json()
+        logging.info(f"📨 FastPay Response: {response_data}")
+        if response_data.get("code") == 200 and response_data.get("data"):
+            return response_data["data"].get("payUrl") or "❌ Payment URL not returned"
+        return f"❌ FastPay Error: {response_data.get('msg', 'Unknown error')}"
     except Exception as e:
-        await update.message.reply_text(f"❌ Request Error: {str(e)}")
-        return ConversationHandler.END
+        logging.error(f"Request Exception: {str(e)}")
+        return f"❌ Request Error: {str(e)}"
 
-# === "payment done" Handler ===
-async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    text = update.message.text.lower()
-    if "payment done" in text and user_id in pending_orders:
-        order = pending_orders[user_id]
-        await update.message.reply_text(
-            f"✅ ₹{order['amount']} Payment Received Bhai!\n"
-            f"🧾 Order ID: {order['order_id']}\n🎉 Thank you!"
-        )
-        del pending_orders[user_id]
+# --- TELEGRAM BOT HANDLERS ---
+ASK_AMOUNT = range(1)
 
-# === Cancel ===
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Payment cancelled.")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Welcome! Send /pay to start payment.")
+
+async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("💰 Kitna pay karna hai? Amount bhejo.")
+    return ASK_AMOUNT
+
+async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    amount = update.message.text.strip()
+    if not amount.isdigit():
+        await update.message.reply_text("❌ Sirf number bhejo, jaise 500")
+        return ASK_AMOUNT
+    link = create_payment_link(amount)
+    await update.message.reply_text(f"✅ Payment link generated:
+{link}")
     return ConversationHandler.END
 
-# === MAIN ===
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Cancelled.")
+    return ConversationHandler.END
+
+# --- MAIN ---
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("pay", pay_command)],
+    states={ASK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_amount)]},
+    fallbacks=[CommandHandler("cancel", cancel)]
+)
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(conv_handler)
+
 if __name__ == '__main__':
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("pay", pay)],
-        states={ASK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_amount)]},
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("payment done"), check_payment))
-
-    print("✅ Bot is running in LIVE mode...")
     app.run_polling()
