@@ -3,7 +3,7 @@ import string
 import random
 import hashlib
 import httpx
-from telegram import Update, ForceReply
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
 # Enable logging
@@ -17,7 +17,7 @@ BOT_TOKEN = "7603128499:AAHrUje-z46qOmqcGJ89GGFaCiR4toVxGA8"
 MERCHANT_NO = "mer553833"
 MERCHANT_KEY = "f760332dcb1dd887d4079754b52fdb2b"
 PAYMENT_URL = "https://api.fast-vip.com/api/payGate/payOrder"
-NOTIFY_URL = "https://yourdomain.com/callback"  # replace with your actual domain
+NOTIFY_URL = "https://example.com/callback"  # replace with your actual callback URL
 RETURN_URL = "https://t.me/ott_heree"
 
 ASK_AMOUNT = 1
@@ -59,8 +59,9 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         "orderNo": order_no,
         "notifyUrl": NOTIFY_URL,
         "returnUrl": RETURN_URL,
-        "payType": "BANK",
-        "productName": "OTT Purchase"
+        "payType": "BANK",  # or "QR", "UPI" if supported by FastPay
+        "productName": "OTT Purchase",
+        "productCode": "90001"  # Required product code from FastPay
     }
     payload["sign"] = generate_sign(payload)
 
