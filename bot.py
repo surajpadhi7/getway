@@ -1,114 +1,146 @@
-import logging
-import string
+import json
+import time
 import random
 import hashlib
-import httpx
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+import requests
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# ====== CONFIG ======
+TOKEN = '7910867581:AAFk5K2UCcO0ZDcNwYId9wLYw3kxUWzgSbM'
+ADMIN_CHAT_ID = '6148224523'
 
-# Replace with your credentials
-BOT_TOKEN = "7603128499:AAHrUje-z46qOmqcGJ89GGFaCiR4toVxGA8"
-MERCHANT_NO = "mer553833"
-MERCHANT_KEY = "f760332dcb1dd887d4079754b52fdb2b"
-PAYMENT_URL = "https://api.fast-vip.com/api/payGate/payOrder"
-NOTIFY_URL = "https://example.com/callback"  # replace with your actual callback URL
-RETURN_URL = "https://t.me/ott_heree"
+MERCHANT_NO = 'mer553833'
+SECRET_KEY = 'f760332dcb1dd887d4079754b52fdb2b'
+PAYMENT_URL = 'https://api.fast-vip.com/api/payGate/payOrder'
+CALLBACK_URL = 'https://yourdomain.com/api/webhook1'
 
-ASK_AMOUNT = 1
+OTT_PLATFORMS = {
+    "Netflix": {"6": 500, "12": 900},
+    "Prime Video": {"6": 400, "12": 800},
+    "Disney+ Hotstar": {"6": 300, "12": 600},
+    "Hulu": {"6": 350, "12": 700}
+}
 
-# Utility to generate a random order number
-def generate_order_no():
-    return "OTT" + ''.join(random.choices(string.digits, k=13))
 
-# Utility to generate sign using MD5
-def generate_sign(payload: dict) -> str:
-    keys = sorted(payload)
-    sign_str = ""
-    for key in keys:
-        if payload[key] is not None and payload[key] != "":
-            sign_str += f"{key}={payload[key]}&"
-    sign_str += f"key={MERCHANT_KEY}"
-    return hashlib.md5(sign_str.encode('utf-8')).hexdigest().upper()
+# ====== SIGN GENERATION ======
+def generate_sign(params, secret_key):
+    try:
+        sorted_items = sorted((k, v) for k, v in params.items() if v and k != 'sign')
+        sign_str = '&'.join(f"{k}={v}" for k, v in sorted_items)
+        sign_str += secret_key
+        return hashlib.md5(sign_str.encode()).hexdigest()
+    except Exception as e:
+        print("Signature Error:", e)
+        return ''
 
-# Start command
-def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update.message.reply_text("Welcome! Use /pay to make a payment.")
 
-# Pay command handler
-async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("💰 Kitna pay karna hai? Amount bhejo (e.g. 500)")
-    return ASK_AMOUNT
-
-# Receive amount and call FastPay
-async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    amount = update.message.text.strip()
-    if not amount.isdigit():
-        await update.message.reply_text("❌ Amount sahi format me bhejo (sirf number)")
-        return ConversationHandler.END
-
-    order_no = generate_order_no()
+# ====== PAYMENT LINK GENERATOR ======
+def generate_payment_link(platform, amount):
+    order_no = "PAYIN" + str(int(time.time())) + str(random.randint(100, 999))
     payload = {
         "merchantNo": MERCHANT_NO,
-        "orderAmount": amount,
         "orderNo": order_no,
-        "notifyUrl": NOTIFY_URL.replace(";", ""),
-        "returnUrl": RETURN_URL.replace(";", ""),
-        "payType": "BANK",
-        "productName": "OTT Purchase",
-        "productCode": "90001"
+        "orderAmt": str(amount),
+        "firstName": "john",
+        "lastName": "tom",
+        "payEmail": "john.tom@gmail.com",
+        "payPhone": "02012345678",
+        "productCode": "80001",
+        "notifyUrl": CALLBACK_URL
     }
-    payload["sign"] = generate_sign(payload)
+    payload["sign"] = generate_sign(payload, SECRET_KEY)
 
-    logger.info(f"\n📦 Payload: {payload}")
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(PAYMENT_URL, json=payload)
-            logger.info(f"🔄 HTTP Status: {response.status_code}")
+        headers = {
+            'Content-Type': 'application/json'
+        }
+        response = requests.post(PAYMENT_URL, headers=headers, data=json.dumps(payload))
+        response_data = response.json()
+        print("Response:", response_data)
 
-            if response.status_code != 200:
-                await update.message.reply_text(f"❌ Server returned HTTP {response.status_code}. Try later.")
-                return ConversationHandler.END
-
-            res_json = response.json()
-            logger.info(f"📨 FastPay Response: {res_json}")
-
-            if res_json.get("code") == 200 and res_json.get("data"):
-                pay_link = res_json["data"].get("payUrl")
-                await update.message.reply_text(f"✅ Payment link generated:\n{pay_link}")
-            else:
-                msg = res_json.get("msg", "FastPay error: Unknown error")
-                await update.message.reply_text(f"❌ FastPay error: {msg}")
+        if response_data.get("code") == 200 and "data" in response_data:
+            return response_data["data"].get("payUrl")
+        else:
+            print("Payment Failed:", response_data)
+            return None
     except Exception as e:
-        logger.error(f"❌ Request Error: {e}")
-        await update.message.reply_text("❌ Server error. Contact admin.")
+        print("Error:", e)
+        return None
 
-    return ConversationHandler.END
 
-# Cancel command
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Cancelled.")
-    return ConversationHandler.END
+# ====== START COMMAND ======
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton(platform, callback_data=platform)] for platform in OTT_PLATFORMS.keys()]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Select OTT Platform:", reply_markup=reply_markup)
 
-# Main
-if __name__ == '__main__':
-    app = Application.builder().token(BOT_TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("pay", pay_command)],
-        states={
-            ASK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
+# ====== PLATFORM SELECTION ======
+async def handle_ott_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    platform = query.data
+    keyboard = [
+        [
+            InlineKeyboardButton(f"6 Months - ₹{OTT_PLATFORMS[platform]['6']}", callback_data=f"{platform}_6"),
+            InlineKeyboardButton(f"12 Months - ₹{OTT_PLATFORMS[platform]['12']}", callback_data=f"{platform}_12")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(f"You selected {platform}. Choose a plan:", reply_markup=reply_markup)
+
+
+# ====== PLAN SELECTION ======
+async def handle_plan_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    selected = query.data
+    platform, duration = selected.split("_")
+    amount = OTT_PLATFORMS[platform][duration]
+
+    payment_link = generate_payment_link(platform, amount)
+    if payment_link:
+        await query.edit_message_text(
+            f"You selected {platform} ({duration} months).\n\nClick below to pay:\n{payment_link}"
+        )
+    else:
+        await query.edit_message_text("❌ Failed to generate payment link. Try again later.")
+
+
+# ====== CALLBACK / MANUAL COMMAND FOR SUCCESS NOTIFICATION ======
+async def payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = update.message.text.split()
+    if len(data) < 3:
+        await update.message.reply_text("Invalid format. Use: /callback Netflix 6 500")
+        return
+
+    platform, duration, amount = data[0], data[1], data[2]
+
+    message = (
+        f"✅ Payment Received!\n"
+        f"📺 Platform: {platform}\n"
+        f"🕒 Duration: {duration} months\n"
+        f"💰 Amount: ₹{amount}"
     )
+    await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=message)
+
+
+# ====== MAIN ======
+def main():
+    app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(handle_ott_selection, pattern='^(Netflix|Prime Video|Disney\+ Hotstar|Hulu)$'))
+    app.add_handler(CallbackQueryHandler(handle_plan_selection, pattern='^(.*)_(6|12)$'))
+    app.add_handler(CommandHandler("callback", payment_callback))  # Manual trigger
 
-    logger.info("🚀 Bot started")
+    print("🤖 Bot is running...")
     app.run_polling()
+
+
+# ENTRY POINT
+if _name_ == '_main_':
+    main()
