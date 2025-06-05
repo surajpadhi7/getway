@@ -91,6 +91,6 @@ def run_bot():
     app.run_polling()
 
 # --- Run Both Together ---
-if __name__ == "__main__":
+if __name__ == "_main_":
     threading.Thread(target=run_flask).start()
     run_bot()
