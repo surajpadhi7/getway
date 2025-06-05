@@ -1,96 +1,73 @@
-from flask import Flask, request
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import hashlib, time, random, requests, threading
+import hashlib
+import time
+import random
+import json
+import requests
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Configuration
-BOT_TOKEN = "7910867581:AAFk5K2UCcO0ZDcNwYId9wLYw3kxUWzgSbM"
-MERCHANT_NO = "mer553833"
-SIGN_KEY = "f760332dcb1dd887d4079754b52fdb2b"
-PRODUCT_CODE = "80001"
-NOTIFY_URL = "https://yourdomain.com/callback"  # change to your webhook URL
+BOT_TOKEN = '7752562013:AAFfaikf_QZFy5TEGiSP0ahinz0t7ZXgIX0'
+MERCHANT_NO = 'mer553833'
+SECRET_KEY = 'f760332dcb1dd887d4079754b52fdb2b'
+NOTIFY_URL = 'https://yourdomain.com/api/webhook1'  # Update this
 
-OTT_OPTIONS = ["Disney+", "Hotstar", "Netflix", "Zee5"]
-PRICES = [200, 400, 600, 800]
+# Signature function (same as PHP logic)
+def generate_signature(params, key):
+    sorted_params = dict(sorted((k, v) for k, v in params.items() if v and k != 'sign'))
+    sign_str = '&'.join([f'{k}={v}' for k, v in sorted_params.items()]) + key
+    return hashlib.md5(sign_str.encode('utf-8')).hexdigest()
 
-# Flask app for webhook
-flask_app = Flask(__name__)
-
-@flask_app.route("/callback", methods=["POST"])
-def payment_callback():
-    data = request.get_json() or request.form
-    with open("callback_data.txt", "a") as f:
-        f.write(str(data) + "\n")
-    return "OK"
-
-# Signature function (PHP-style)
-def create_signature(params: dict, key: str) -> str:
-    sorted_items = sorted((k, v) for k, v in params.items() if k != "sign" and v)
-    base = "&".join(f"{k}={v}" for k, v in sorted_items)
-    return hashlib.md5((base + key).encode()).hexdigest()
-
-# Payment request generator
-def generate_payment_link(user, platform, price):
-    order_no = f"PAYIN{int(time.time())}{random.randint(100,999)}"
-    params = {
+# Payment link generator
+def create_payment_link(amount):
+    order_no = f"PAYIN{int(time.time())}{random.randint(1111,9999)}"
+    payload = {
         "merchantNo": MERCHANT_NO,
         "orderNo": order_no,
-        "orderAmt": str(price),
-        "firstName": user.first_name or "TG",
-        "lastName": "User",
-        "payEmail": f"{order_no}@demo.com",
-        "payPhone": "9999999999",
-        "productCode": PRODUCT_CODE,
+        "orderAmt": str(amount),
+        "firstName": "john",
+        "lastName": "tom",
+        "payEmail": "john.tom@gmail.com",
+        "payPhone": "02012345678",
+        "productCode": "80001",
         "notifyUrl": NOTIFY_URL
     }
-    params["sign"] = create_signature(params, SIGN_KEY)
-    response = requests.post("https://api.fast-vip.com/api/payGate/payOrder", json=params)
-    return response.json()
+    payload["sign"] = generate_signature(payload, SECRET_KEY)
 
-# --- Telegram Bot Handlers ---
+    headers = {'Content-Type': 'application/json'}
+    response = requests.post("https://api.fast-vip.com/api/payGate/payOrder", headers=headers, data=json.dumps(payload))
 
+    try:
+        res = response.json()
+        if res.get("data") and res["data"].get("payUrl"):
+            return res["data"]["payUrl"]
+        else:
+            return f"❌ Failed to get payment link: {res.get('msg', 'Unknown error')}"
+    except Exception as e:
+        return f"❌ Error parsing response: {str(e)}"
+
+# Telegram command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(name, callback_data=f"ott_{name}")] for name in OTT_OPTIONS]
-    await update.message.reply_text("Select OTT Platform:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("👋 Welcome! Please enter the amount (e.g., 200):")
 
-async def ott_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    platform = query.data.split("_")[1]
-    context.user_data["platform"] = platform
-    keyboard = [[InlineKeyboardButton(f"₹{p}", callback_data=f"price_{p}")] for p in PRICES]
-    await query.edit_message_text(f"Selected: {platform}\nNow choose price:", reply_markup=InlineKeyboardMarkup(keyboard))
+async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        amount = int(update.message.text)
+        await update.message.reply_text("⏳ Generating payment link...")
+        link = create_payment_link(amount)
+        await update.message.reply_text(f"✅ Pay using this link:\n{link}")
+    except ValueError:
+        await update.message.reply_text("❌ Please enter a valid number (e.g., 100, 200).")
 
-async def price_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    price = int(query.data.split("_")[1])
-    platform = context.user_data.get("platform", "Unknown")
-
-    user = query.from_user
-    response = generate_payment_link(user, platform, price)
-
-    if response.get("data") and response["data"].get("payUrl"):
-        pay_url = response["data"]["payUrl"]
-        await query.edit_message_text(
-            f"✅ *Platform:* {platform}\n💰 *Price:* ₹{price}\n\n👉 [Click here to Pay]({pay_url})",
-            parse_mode="Markdown"
-        )
-    else:
-        await query.edit_message_text("❌ Failed to create payment link.")
-
-# --- Launch Telegram Bot & Flask together ---
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=5000)
-
+# Main bot setup
 def run_bot():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(ott_selected, pattern="^ott_"))
-    app.add_handler(CallbackQueryHandler(price_selected, pattern="^price_"))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_amount))
+
+    print("🤖 Bot is running...")
     app.run_polling()
 
-# --- Run Both Together ---
-if __name__ == "_main_":
-    threading.Thread(target=run_flask).start()
+if __name__ == '__main__':
     run_bot()
