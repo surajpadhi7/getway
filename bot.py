@@ -30,7 +30,7 @@ def create_payment_link(amount):
         "payEmail": "john.tom@gmail.com",
         "payPhone": "02012345678",
         "accPhone": "02012345678",
-        "productCode": "90001",
+        "productCode": "80001",
         "notifyUrl": NOTIFY_URL
     }
     payload["sign"] = generate_signature(payload, SECRET_KEY)
