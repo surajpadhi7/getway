@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 BOT_TOKEN = '7910867581:AAFk5K2UCcO0ZDcNwYId9wLYw3kxUWzgSbM'
 MERCHANT_NO = 'mer553833'
 SECRET_KEY = 'f760332dcb1dd887d4079754b52fdb2b'
-NOTIFY_URL = 'https://yourdomain.com/api/webhook1'  # Replace with actual webhook URL
+NOTIFY_URL = 'https://bot.cadbury.store/tg/webhook.php'  # Replace with actual webhook URL
 
 # 🔑 Generate signature (PHP-style)
 def generate_signature(params, key):
