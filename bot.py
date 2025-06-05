@@ -29,6 +29,7 @@ def create_payment_link(amount):
         "lastName": "Tom",
         "payEmail": "john.tom@gmail.com",
         "payPhone": "02012345678",
+        "accPhone": "02012345678",
         "productCode": "90001",
         "notifyUrl": NOTIFY_URL
     }
